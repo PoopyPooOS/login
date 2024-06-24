@@ -1,0 +1,15 @@
+[package]
+name = "login"
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+
+[dependencies]
+linux-ipc = "0.2.1"
+ipc-userd = { path = "../userd/ipc-userd" }
+rpassword = "7.3.1"
+nix = { version = "0.29.0", features = ["user"] }
