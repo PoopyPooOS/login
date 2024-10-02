@@ -8,7 +8,7 @@ use std::{
 };
 
 fn main() {
-    let mut userd = Userd::new("/tmp/init/services/userd.sock");
+    let mut userd = Userd::new("/tmp/ipc/serviced/userd.sock");
 
     let user = login_prompt(&mut userd);
 
