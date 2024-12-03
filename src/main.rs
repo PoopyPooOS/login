@@ -1,26 +1,53 @@
 use ipc_userd::{Error, User, Userd};
-use nix::unistd::{setuid, Uid};
+use logger::{fatal, warn};
+use nix::{
+    sys::signal::{kill, Signal::SIGUSR1},
+    unistd::{setuid, Pid, Uid},
+};
 use rpassword::read_password;
 use std::{
     env,
     io::{stdin, stdout, Write},
-    process::Command,
+    process::{self, Command},
 };
 
 fn main() {
-    let mut userd = Userd::new("/tmp/ipc/serviced/userd.sock");
+    let serviced_pid = env::var("SERVICED_PID")
+        .unwrap_or_else(|_| {
+            fatal!("SERVICED_PID environment variable not set, was this launched manually?");
+            process::exit(1);
+        })
+        .parse::<i32>()
+        .unwrap_or_else(|_| {
+            fatal!("SERVICED_PID environment variable is not an integer");
+            process::exit(1);
+        });
 
-    let user = login_prompt(&mut userd);
+    let mut userd = Userd::new("/tmp/ipc/services/userd.sock");
 
-    setuid(Uid::from(user.uid)).expect("Failed to set uid");
+    match kill(Pid::from_raw(serviced_pid), SIGUSR1) {
+        Ok(()) => (),
+        Err(err) => {
+            warn!(format!("Failed to send ready signal to serviced: {err:#?}"));
+            process::exit(1);
+        }
+    }
 
-    env::set_var("HOME", &user.home);
-    env::set_var("USER", &user.username);
+    loop {
+        let user = login_prompt(&mut userd);
 
-    Command::new(user.shell)
-        .current_dir(user.home)
-        .spawn()
-        .expect("Failed to launch shell");
+        // Prepare environment
+        setuid(Uid::from(user.uid)).expect("Failed to set uid");
+        env::set_var("HOME", &user.home);
+        env::set_var("USER", &user.username);
+
+        // The shell's exit code is irrelevant
+        let _ = Command::new(user.shell)
+            .current_dir(user.home)
+            .spawn()
+            .expect("Failed to launch shell")
+            .wait();
+    }
 }
 
 fn login_prompt(userd: &mut Userd) -> User {
@@ -32,9 +59,7 @@ fn login_prompt(userd: &mut Userd) -> User {
             Err(err) => {
                 match err {
                     Error::NoSuchUser => eprintln!("No such user"),
-                    Error::WrongPassword => {
-                        eprintln!("Wrong password!");
-                    }
+                    Error::WrongPassword => eprintln!("Wrong password"),
                     Error::UserAlreadyExists => unreachable!("fetch_user can not return this error"),
                 }
 
@@ -42,25 +67,18 @@ fn login_prompt(userd: &mut Userd) -> User {
             }
         };
 
-        let password = if user.password.is_some() {
-            password_prompt("password")
-        } else {
-            String::default()
-        };
+        let password = user.password.is_some().then(|| password_prompt("password")).unwrap_or_default();
 
-        let result = userd.verify_password(user.uid, password);
-
-        if let Err(err) = result {
-            match err {
-                Error::NoSuchUser => eprintln!("No such user"),
-                Error::WrongPassword => {
-                    eprintln!("Wrong password!");
-                }
-                Error::UserAlreadyExists => unreachable!("fetch_user can not return this error"),
+        match userd.verify_password(user.uid, password) {
+            Ok(()) => {
+                println!();
+                break user;
             }
-        } else {
-            println!();
-            break user;
+            Err(err) => match err {
+                Error::NoSuchUser => eprintln!("No such user"),
+                Error::WrongPassword => eprintln!("Wrong password"),
+                Error::UserAlreadyExists => unreachable!("verify_password can not return this error"),
+            },
         }
     }
 }

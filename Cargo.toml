@@ -12,4 +12,9 @@ strip = true
 linux-ipc = "0.2.1"
 ipc-userd = { path = "../userd/ipc-userd" }
 rpassword = "7.3.1"
-nix = { version = "0.29.0", features = ["user"] }
+nix = { version = "0.29.0", default-features = false, features = [
+    "user",
+    "signal",
+] }
+
+logger = { path = "../logger" }
