@@ -1,5 +1,6 @@
+use ipc::IpcError;
 use ipc_userd::{Error, User, Userd};
-use logger::{fatal, warn};
+use logger::{error, fatal, warn};
 use nix::{
     sys::signal::{kill, Signal::SIGUSR1},
     unistd::{setuid, Pid, Uid},
@@ -11,7 +12,8 @@ use std::{
     process::{self, Command},
 };
 
-fn main() {
+fn main() -> Result<(), IpcError> {
+    logger::unset_app_name!();
     let serviced_pid = env::var("SERVICED_PID")
         .unwrap_or_else(|_| {
             fatal!("SERVICED_PID environment variable not set, was this launched manually?");
@@ -23,13 +25,12 @@ fn main() {
             process::exit(1);
         });
 
-    let mut userd = Userd::new("/tmp/ipc/services/userd.sock");
+    let mut userd = Userd::new("/tmp/ipc/services/userd.sock")?;
 
     match kill(Pid::from_raw(serviced_pid), SIGUSR1) {
         Ok(()) => (),
         Err(err) => {
             warn!(format!("Failed to send ready signal to serviced: {err:#?}"));
-            process::exit(1);
         }
     }
 
@@ -58,9 +59,10 @@ fn login_prompt(userd: &mut Userd) -> User {
             Ok(user) => user,
             Err(err) => {
                 match err {
-                    Error::NoSuchUser => eprintln!("No such user"),
-                    Error::WrongPassword => eprintln!("Wrong password"),
+                    Error::NoSuchUser => error!("No such user"),
+                    Error::WrongPassword => error!("Wrong password"),
                     Error::UserAlreadyExists => unreachable!("fetch_user can not return this error"),
+                    Error::IpcError(ipc_error) => error!(format!("IPC error: {ipc_error}")),
                 }
 
                 continue;
@@ -75,9 +77,10 @@ fn login_prompt(userd: &mut Userd) -> User {
                 break user;
             }
             Err(err) => match err {
-                Error::NoSuchUser => eprintln!("No such user"),
-                Error::WrongPassword => eprintln!("Wrong password"),
+                Error::NoSuchUser => error!("No such user"),
+                Error::WrongPassword => error!("Wrong password"),
                 Error::UserAlreadyExists => unreachable!("verify_password can not return this error"),
+                Error::IpcError(ipc_error) => error!(format!("IPC error: {ipc_error}")),
             },
         }
     }
