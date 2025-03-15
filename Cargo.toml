@@ -1,0 +1,20 @@
+[package]
+name = "login"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rpassword = { workspace = true }
+# TODO: Switch to rustix when it implements all the needed APIs
+nix = { workspace = true, default-features = false, features = [
+  "signal",
+  "user",
+  "term",
+  "fs",
+] }
+
+ipc-userd = { workspace = true }
+ipc-serviced = { workspace = true }
+
+logger = { workspace = true }
+ipc = { workspace = true }
