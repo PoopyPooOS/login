@@ -1,32 +1,49 @@
-use ipc_userd::{Error, User, Userd};
+use error::Error;
 use logger::error;
 use nix::{
-    fcntl::{OFlag, open},
+    fcntl::{open, OFlag},
     libc::login_tty,
     sys::stat::Mode,
-    unistd::{Uid, setsid, setuid},
+    unistd::{setsid, setuid, Uid},
 };
+use prelude::logger;
 use rpassword::read_password;
 use std::{
     env,
     fmt::Display,
-    io::{Write, stdin, stdout},
+    io::{stdin, stdout, Write},
     os::fd::AsRawFd,
     process::Command,
 };
+use userd::{User, Userd};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+mod error {
+    #[prelude::error_enum]
+    pub enum Error {
+        #[error("Failed to signal service daemon: {0}")]
+        Serviced(#[from] serviced::Error),
+        #[error("Userd error: {0}")]
+        Userd(#[from] userd::Error),
+        #[error("IPC Error: {0}")]
+        IpcError(#[from] ipc::error::IpcError),
+        #[error("Nix Error: {0}")]
+        Nix(#[from] nix::Error),
+    }
+}
+
+#[prelude::entry(err: Error)]
+fn main() {
     logger::unset_app_name!();
     logger::panic::set_panic_hook();
 
-    let serviced_pid = ipc_serviced::get_pid();
+    let serviced_pid = serviced::get_pid()?;
 
     let mut userd = Userd::new("/tmp/ipc/services/userd.sock")?;
 
-    ipc_serviced::ready(serviced_pid);
+    serviced::ready(serviced_pid)?;
 
     loop {
-        let user = login_prompt(&mut userd);
+        let user = login_prompt(&mut userd)?;
 
         let tty_fd = open("/dev/tty0", OFlag::O_RDWR, Mode::empty())?;
 
@@ -50,46 +67,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-fn login_prompt(userd: &mut Userd) -> User {
+fn login_prompt(userd: &mut Userd) -> Result<User, Error> {
     loop {
         let username = prompt("Username");
 
         let user = match userd.fetch_user(username) {
             Ok(user) => user,
             Err(err) => {
-                match err {
-                    Error::NoSuchUser => error!("No such user"),
-                    Error::WrongPassword => error!("Wrong password"),
-                    Error::UserAlreadyExists => {
-                        unreachable!("fetch_user can not return this error")
-                    }
-                    Error::IpcError(ipc_error) => error!("IPC error: {ipc_error}"),
-                }
-
+                error!("{err}");
                 continue;
             }
         };
 
-        let password = user
-            .password
-            .is_some()
-            .then(|| password_prompt("password"))
-            .unwrap_or_default();
+        let password = if user.password.is_some() {
+            password_prompt("password")
+        } else {
+            String::default()
+        };
 
-        match userd.verify_password(user.uid, password) {
-            Ok(()) => {
-                println!();
-                break user;
-            }
-            Err(err) => match err {
-                Error::NoSuchUser => error!("No such user"),
-                Error::WrongPassword => error!("Wrong password"),
-                Error::UserAlreadyExists => {
-                    unreachable!("verify_password can not return this error")
-                }
-                Error::IpcError(ipc_error) => error!("IPC error: {ipc_error}"),
-            },
+        if let Err(err) = userd.verify_password(user.uid, password) {
+            error!("{err}");
         }
+
+        println!();
+        break Ok(user);
     }
 }
 
